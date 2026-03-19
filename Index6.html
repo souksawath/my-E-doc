@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="lo">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Document Enterprise V5.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // Firebase Configuration
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'doc-management-v5-0';
+
+        let documents = [];
+        let researches = [];
+        let currentTab = 'general';
+        let reportChart = null;
+
+        // Auto-hide loading if it takes too long (Safety Timeout)
+        const loadingTimeout = setTimeout(() => {
+            hideLoading();
+        }, 5000);
+
+        const hideLoading = () => {
+            clearTimeout(loadingTimeout);
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) overlay.style.display = 'none';
+            document.getElementById('mainContent').classList.remove('hidden');
+        };
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Auth Error:", err);
+                hideLoading();
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('userDisplay').textContent = `ID: ${user.uid.substring(0,8)}`;
+                hideLoading();
+                
+                // Real-time Data Sync
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'documents'), (snap) => {
+                    documents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    refreshUI();
+                }, (err) => console.error(err));
+
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'researches'), (snap) => {
+                    researches = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    refreshUI();
+                }, (err) => console.error(err));
+            }
+        });
+
+        initAuth();
+
+        // --- Functions ---
+        window.switchTab = (tab) => {
+            currentTab = tab;
+            ['general', 'research', 'reports'].forEach(t => {
+                const btn = document.getElementById(`tab-${t}`);
+                if (t === tab) {
+                    btn.className = 'px-6 py-2 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition-all';
+                } else {
+                    btn.className = 'px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all';
+                }
+            });
+
+            document.getElementById('tableSection').classList.toggle('hidden', tab === 'reports');
+            document.getElementById('reportSection').classList.toggle('hidden', tab !== 'reports');
+            refreshUI();
+        };
+
+        window.refreshUI = () => {
+            if (currentTab === 'reports') { updateReports(); return; }
+            const tbody = document.getElementById('tableBody');
+            const thead = document.getElementById('tableHead');
+            tbody.innerHTML = '';
+
+            if (currentTab === 'general') {
+                thead.innerHTML = `<tr><th class="p-4">ວັນທີ</th><th class="p-4">ເລກທີ/ປະເພດ</th><th class="p-4">ຫົວຂໍ້</th><th class="p-4 text-center">ຈັດການ</th></tr>`;
+                documents.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(d => {
+                    tbody.innerHTML += `
+                        <tr class="border-b hover:bg-slate-50 transition-colors">
+                            <td class="p-4 text-xs text-slate-500">${d.date}</td>
+                            <td class="p-4">
+                                <div class="text-[10px] text-indigo-600 font-bold">${d.docNo}</div>
+                                <div class="text-[11px] text-slate-400 italic">${d.type}</div>
+                            </td>
+                            <td class="p-4 font-bold text-slate-800">${d.title}</td>
+                            <td class="p-4 text-center">
+                                <button onclick="deleteDoc('${d.id}')" class="text-red-400 hover:text-red-600 font-bold text-xs">ລຶບ</button>
+                            </td>
+                        </tr>`;
+                });
+            } else {
+                thead.innerHTML = `<tr><th class="p-4">ວັນທີ</th><th class="p-4">ຫົວຂໍ້ຄົ້ນຄວ້າ</th><th class="p-4">ສະຖານະ</th><th class="p-4 text-center">ຈັດການ</th></tr>`;
+                researches.sort((a,b) => new Date(b.assignDate) - new Date(a.assignDate)).forEach(r => {
+                    tbody.innerHTML += `
+                        <tr class="border-b hover:bg-slate-50 transition-colors">
+                            <td class="p-4 text-xs text-slate-500">${r.assignDate}</td>
+                            <td class="p-4 font-bold text-slate-800">${r.title}</td>
+                            <td class="p-4">
+                                <span class="px-2 py-1 rounded-full text-[10px] bg-amber-100 text-amber-700 font-bold uppercase">${r.status}</span>
+                            </td>
+                            <td class="p-4 text-center">
+                                <button onclick="deleteRes('${r.id}')" class="text-red-400 hover:text-red-600 font-bold text-xs">ລຶບ</button>
+                            </td>
+                        </tr>`;
+                });
+            }
+        };
+
+        window.saveData = async (e) => {
+            e.preventDefault();
+            const data = {
+                date: document.getElementById('f-date').value,
+                docNo: document.getElementById('f-no').value,
+                title: document.getElementById('f-title').value,
+                type: document.getElementById('f-type').value,
+                status: 'ລໍຖ້າ',
+                updatedAt: new Date().toISOString()
+            };
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'documents'), data);
+            closeModal();
+        };
+
+        window.deleteDoc = async (id) => { if(confirm('ຢືນຢັນການລຶບ?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'documents', id)); };
+        window.deleteRes = async (id) => { if(confirm('ຢືນຢັນການລຶບ?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'researches', id)); };
+
+        function updateReports() {
+            const ctx = document.getElementById('reportChart').getContext('2d');
+            if (reportChart) reportChart.destroy();
+            reportChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['ເອກະສານ', 'ຄົ້ນຄວ້າ'],
+                    datasets: [{
+                        data: [documents.length, researches.length],
+                        backgroundColor: ['#6366f1', '#f59e0b'],
+                        borderWidth: 0
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '70%' }
+            });
+            document.getElementById('totalCount').textContent = documents.length + researches.length;
+        }
+
+        window.openModal = () => document.getElementById('modal').classList.remove('hidden');
+        window.closeModal = () => document.getElementById('modal').classList.add('hidden');
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;700;900&display=swap');
+        body { font-family: 'Noto Sans Lao', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-white flex flex-col items-center justify-center z-[100]">
+        <div class="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+        <p class="mt-4 font-bold text-slate-400 animate-pulse italic text-sm">ກຳລັງເຊື່ອມຕໍ່ລະບົບ Cloud...</p>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="hidden min-h-screen flex flex-col">
+        <nav class="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
+            <div class="flex items-center gap-3">
+                <div class="bg-indigo-600 p-2 rounded-xl text-white font-black italic shadow-lg shadow-indigo-200">ED</div>
+                <h1 class="font-black text-slate-800 tracking-tight text-lg">SOUKSAWATH.K</h1>
+            </div>
+            <div class="flex gap-2 p-1 bg-slate-100 rounded-2xl">
+                <button id="tab-general" onclick="switchTab('general')" class="px-6 py-2 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition-all">ເອກະສານທົ່ວໄປ</button>
+                <button id="tab-research" onclick="switchTab('research')" class="px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all">ວຽກຄົ້ນຄວ້າ</button>
+                <button id="tab-reports" onclick="switchTab('reports')" class="px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all">📊 ລາຍງານ</button>
+            </div>
+            <div id="userDisplay" class="text-[10px] font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-full border"></div>
+        </nav>
+
+        <main class="container mx-auto p-6 md:p-8 flex-1">
+            <div id="tableSection" class="space-y-6">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-xl font-black text-slate-800">ລາຍການຂໍ້ມູນຫຼ້າສຸດ</h2>
+                    <button onclick="openModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold text-xs shadow-xl shadow-indigo-100 transition-all">+ ເພີ່ມໃໝ່</button>
+                </div>
+                <div class="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm">
+                    <table class="w-full text-left">
+                        <thead id="tableHead" class="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase border-b"></thead>
+                        <tbody id="tableBody" class="divide-y divide-slate-50"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="reportSection" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div class="bg-white p-10 rounded-[2.5rem] border shadow-sm flex flex-col items-center justify-center relative">
+                    <div class="h-64 w-full">
+                        <canvas id="reportChart"></canvas>
+                    </div>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                        <p class="text-[10px] font-bold text-slate-400 uppercase">ຂໍ້ມູນທັງໝົດ</p>
+                        <span id="totalCount" class="text-4xl font-black text-slate-800">0</span>
+                    </div>
+                </div>
+                <div class="space-y-4">
+                    <div class="bg-indigo-600 p-8 rounded-[2rem] text-white shadow-xl shadow-indigo-100">
+                        <p class="text-xs opacity-70">ສະຖານະລະບົບ</p>
+                        <h3 class="text-2xl font-bold mt-1">Online (Real-time)</h3>
+                    </div>
+                    <div class="bg-white p-8 rounded-[2rem] border border-slate-100">
+                        <p class="text-xs text-slate-400">ໝາຍເຫດ</p>
+                        <p class="mt-2 text-sm text-slate-600">ຂໍ້ມູນທັງໝົດຈະຖືກບັນທຶກລົງຖານຂໍ້ມູນ Cloud ແບບອັດຕະໂນມັດ.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div id="modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md border overflow-hidden">
+            <form onsubmit="saveData(event)" class="p-8 space-y-4">
+                <div class="flex justify-between items-center border-b pb-4 mb-2">
+                    <h3 class="font-black text-lg text-slate-800 text-indigo-600">ບັນທຶກເອກະສານໃໝ່</h3>
+                    <button type="button" onclick="closeModal()" class="text-slate-300 hover:text-slate-500">✕</button>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ວັນທີບັນທຶກ</label>
+                    <input type="date" id="f-date" required class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ເລກທີເອກະສານ</label>
+                    <input type="text" id="f-no" placeholder="ED-2024-XXX" class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ຫົວຂໍ້ເອກະສານ</label>
+                    <input type="text" id="f-title" placeholder="ລະບຸຫົວຂໍ້..." required class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-sm font-black border-none">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ປະເພດ</label>
+                    <select id="f-type" class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
+                        <option>ໃບສະເໜີ</option>
+                        <option>ແຈ້ງການ</option>
+                        <option>ຂໍ້ຕົກລົງ</option>
+                        <option>ບົດບັນທຶກ</option>
+                    </select>
+                </div>
+                <div class="flex gap-3 pt-6">
+                    <button type="button" onclick="closeModal()" class="flex-1 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold text-xs">ຍົກເລີກ</button>
+                    <button type="submit" class="flex-2 py-4 bg-indigo-600 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-100 px-8">ບັນທຶກຂໍ້ມູນ</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+</body>
+</html>

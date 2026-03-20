@@ -3,265 +3,511 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>E-Document Enterprise V5.0</title>
+    <title>E-Document Enterprise Cloud System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // Firebase Configuration
-        const firebaseConfig = JSON.parse(__firebase_config);
+        const myConfig = {
+            apiKey: "AIzaSyDlL1a-LZ0gPVGXzD15wMEVS_P9YhZYmGM",
+            authDomain: "ay-e-doc.firebaseapp.com",
+            projectId: "ay-e-doc",
+            storageBucket: "ay-e-doc.firebasestorage.app",
+            messagingSenderId: "467271065376",
+            appId: "1:467271065376:web:4aebb90c6e443394a40145",
+            measurementId: "G-L6DNCEGGJ3"
+        };
+
+        const firebaseConfig = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : myConfig;
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'doc-management-v5-0';
+        const appId = (typeof __app_id !== 'undefined') ? __app_id : 'doc-management-system';
 
         let documents = [];
-        let researches = [];
-        let currentTab = 'general';
-        let reportChart = null;
+        let analyticsChart = null;
+        let currentUser = null;
+        let unsubscribeData = null;
+        let currentReportFilter = 'all'; // all, week, month, quarter, year
 
-        // Auto-hide loading if it takes too long (Safety Timeout)
-        const loadingTimeout = setTimeout(() => {
-            hideLoading();
-        }, 5000);
-
-        const hideLoading = () => {
-            clearTimeout(loadingTimeout);
-            const overlay = document.getElementById('loadingOverlay');
-            if (overlay) overlay.style.display = 'none';
-            document.getElementById('mainContent').classList.remove('hidden');
-        };
-
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Auth Error:", err);
-                hideLoading();
-            }
-        };
-
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                document.getElementById('userDisplay').textContent = `ID: ${user.uid.substring(0,8)}`;
-                hideLoading();
-                
-                // Real-time Data Sync
-                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'documents'), (snap) => {
-                    documents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    refreshUI();
-                }, (err) => console.error(err));
-
-                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'researches'), (snap) => {
-                    researches = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    refreshUI();
-                }, (err) => console.error(err));
-            }
-        });
-
-        initAuth();
-
-        // --- Functions ---
-        window.switchTab = (tab) => {
-            currentTab = tab;
-            ['general', 'research', 'reports'].forEach(t => {
-                const btn = document.getElementById(`tab-${t}`);
-                if (t === tab) {
-                    btn.className = 'px-6 py-2 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition-all';
-                } else {
-                    btn.className = 'px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all';
-                }
-            });
-
-            document.getElementById('tableSection').classList.toggle('hidden', tab === 'reports');
-            document.getElementById('reportSection').classList.toggle('hidden', tab !== 'reports');
-            refreshUI();
-        };
-
-        window.refreshUI = () => {
-            if (currentTab === 'reports') { updateReports(); return; }
-            const tbody = document.getElementById('tableBody');
-            const thead = document.getElementById('tableHead');
-            tbody.innerHTML = '';
-
-            if (currentTab === 'general') {
-                thead.innerHTML = `<tr><th class="p-4">ວັນທີ</th><th class="p-4">ເລກທີ/ປະເພດ</th><th class="p-4">ຫົວຂໍ້</th><th class="p-4 text-center">ຈັດການ</th></tr>`;
-                documents.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(d => {
-                    tbody.innerHTML += `
-                        <tr class="border-b hover:bg-slate-50 transition-colors">
-                            <td class="p-4 text-xs text-slate-500">${d.date}</td>
-                            <td class="p-4">
-                                <div class="text-[10px] text-indigo-600 font-bold">${d.docNo}</div>
-                                <div class="text-[11px] text-slate-400 italic">${d.type}</div>
-                            </td>
-                            <td class="p-4 font-bold text-slate-800">${d.title}</td>
-                            <td class="p-4 text-center">
-                                <button onclick="deleteDoc('${d.id}')" class="text-red-400 hover:text-red-600 font-bold text-xs">ລຶບ</button>
-                            </td>
-                        </tr>`;
-                });
-            } else {
-                thead.innerHTML = `<tr><th class="p-4">ວັນທີ</th><th class="p-4">ຫົວຂໍ້ຄົ້ນຄວ້າ</th><th class="p-4">ສະຖານະ</th><th class="p-4 text-center">ຈັດການ</th></tr>`;
-                researches.sort((a,b) => new Date(b.assignDate) - new Date(a.assignDate)).forEach(r => {
-                    tbody.innerHTML += `
-                        <tr class="border-b hover:bg-slate-50 transition-colors">
-                            <td class="p-4 text-xs text-slate-500">${r.assignDate}</td>
-                            <td class="p-4 font-bold text-slate-800">${r.title}</td>
-                            <td class="p-4">
-                                <span class="px-2 py-1 rounded-full text-[10px] bg-amber-100 text-amber-700 font-bold uppercase">${r.status}</span>
-                            </td>
-                            <td class="p-4 text-center">
-                                <button onclick="deleteRes('${r.id}')" class="text-red-400 hover:text-red-600 font-bold text-xs">ລຶບ</button>
-                            </td>
-                        </tr>`;
-                });
-            }
-        };
-
-        window.saveData = async (e) => {
+        // --- Auth Helpers ---
+        window.handleLogin = async (e) => {
             e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const pass = document.getElementById('loginPass').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+                showNotification("ເຂົ້າສູ່ລະບົບສຳເລັດ");
+            } catch (error) {
+                showNotification("Email ຫຼື Password ບໍ່ຖືກຕ້ອງ", "error");
+            }
+        };
+
+        window.handleLogout = async () => {
+            if (confirm("ຕ້ອງການອອກຈາກລະບົບ?")) {
+                await signOut(auth);
+                location.reload();
+            }
+        };
+
+        const setupDataListener = (user) => {
+            if (!user) {
+                document.getElementById('loginPage').classList.remove('hidden');
+                document.getElementById('mainContent').classList.add('hidden');
+                return;
+            }
+            currentUser = user;
+            document.getElementById('loginPage').classList.add('hidden');
+            document.getElementById('mainContent').classList.remove('hidden');
+            document.getElementById('userDisplay').textContent = user.email;
+
+            const colPath = (typeof __app_id !== 'undefined') ? ['artifacts', appId, 'public', 'data', 'documents'] : ['documents'];
+            unsubscribeData = onSnapshot(collection(db, ...colPath), (snapshot) => {
+                documents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                documents.sort((a, b) => new Date(b.date) - new Date(a.date));
+                refreshUI();
+            }, (error) => {
+                console.error("Error fetching data: ", error);
+            });
+        };
+
+        // --- Business Logic ---
+        window.handleDeptChange = () => {
+            const dept = document.getElementById('docDept').value;
+            document.getElementById('otherDeptContainer').style.display = (dept === 'ອື່ນໆ') ? 'block' : 'none';
+        };
+
+        window.handleTypeChange = () => {
+            const type = document.getElementById('docType').value;
+            document.getElementById('otherTypeContainer').style.display = (type === 'ອື່ນໆ') ? 'block' : 'none';
+        };
+
+        window.setReportFilter = (filter) => {
+            currentReportFilter = filter;
+            const btns = document.querySelectorAll('.report-btn');
+            btns.forEach(b => b.classList.remove('bg-indigo-600', 'text-white'));
+            btns.forEach(b => b.classList.add('bg-white', 'text-slate-600'));
+            
+            // Find the clicked button and highlight it
+            const clickedBtn = Array.from(btns).find(b => b.textContent.includes(filter === 'all' ? 'ທັງໝົດ' : filter === 'week' ? 'ອາທິດ' : filter === 'month' ? 'ເດືອນ' : filter === 'quarter' ? 'ໄຕມາດ' : 'ປີ'));
+            if(clickedBtn) {
+                clickedBtn.classList.add('bg-indigo-600', 'text-white');
+                clickedBtn.classList.remove('bg-white', 'text-slate-600');
+            }
+            
+            updateStats();
+        };
+
+        window.exportToExcel = () => {
+            const data = documents.map(d => ({
+                'ວັນທີ': d.date,
+                'ຫົວຂໍ້': d.title,
+                'ຝ່າຍ': d.department === 'ອື່ນໆ' ? d.otherDept : d.department,
+                'ປະເພດ': d.type === 'ອື່ນໆ' ? d.otherType : d.type,
+                'ຈຸດປະສົງ': d.purpose,
+                'ຜູ້ຮັບຜິດຊອບ': d.owner,
+                'ສະຖານະ': d.status
+            }));
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Documents");
+            XLSX.writeFile(wb, `E-Doc-Report-${new Date().toISOString().slice(0,10)}.xlsx`);
+        };
+
+        document.getElementById('docForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('editId').value;
             const data = {
-                date: document.getElementById('f-date').value,
-                docNo: document.getElementById('f-no').value,
-                title: document.getElementById('f-title').value,
-                type: document.getElementById('f-type').value,
-                status: 'ລໍຖ້າ',
+                date: document.getElementById('docDate').value,
+                department: document.getElementById('docDept').value,
+                otherDept: document.getElementById('otherDeptInput').value,
+                type: document.getElementById('docType').value,
+                otherType: document.getElementById('otherTypeInput').value,
+                title: document.getElementById('docTitle').value,
+                purpose: document.getElementById('docPurpose').value,
+                owner: document.getElementById('docOwner').value,
+                status: document.getElementById('docStatus').value,
+                fileUrl: document.getElementById('docFileUrl').value,
+                note: document.getElementById('docNote').value,
                 updatedAt: new Date().toISOString()
             };
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'documents'), data);
-            closeModal();
+
+            try {
+                const colPath = (typeof __app_id !== 'undefined') ? ['artifacts', appId, 'public', 'data', 'documents'] : ['documents'];
+                if (id) {
+                    await updateDoc(doc(db, ...colPath, id), data);
+                } else {
+                    await addDoc(collection(db, ...colPath), data);
+                }
+                closeModal();
+                showNotification("ບັນທຶກສຳເລັດ");
+            } catch (err) { showNotification("ເກີດຂໍ້ຜິດພາດ", "error"); }
         };
 
-        window.deleteDoc = async (id) => { if(confirm('ຢືນຢັນການລຶບ?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'documents', id)); };
-        window.deleteRes = async (id) => { if(confirm('ຢືນຢັນການລຶບ?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'researches', id)); };
+        window.deleteDocData = async (id) => {
+            if(confirm('ຢືນຢັນການລຶບ?')) {
+                const colPath = (typeof __app_id !== 'undefined') ? ['artifacts', appId, 'public', 'data', 'documents'] : ['documents'];
+                await deleteDoc(doc(db, ...colPath, id));
+            }
+        };
 
-        function updateReports() {
-            const ctx = document.getElementById('reportChart').getContext('2d');
-            if (reportChart) reportChart.destroy();
-            reportChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['ເອກະສານ', 'ຄົ້ນຄວ້າ'],
-                    datasets: [{
-                        data: [documents.length, researches.length],
-                        backgroundColor: ['#6366f1', '#f59e0b'],
-                        borderWidth: 0
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, cutout: '70%' }
-            });
-            document.getElementById('totalCount').textContent = documents.length + researches.length;
+        function refreshUI() {
+            renderTable();
+            updateStats();
         }
 
-        window.openModal = () => document.getElementById('modal').classList.remove('hidden');
+        function updateStats() {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            let filtered = documents.filter(d => {
+                if (!d.date) return false;
+                const dDate = new Date(d.date);
+                
+                if (currentReportFilter === 'all') return true;
+
+                if (currentReportFilter === 'week') {
+                    const diffTime = Math.abs(today - dDate);
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    return diffDays <= 7;
+                } 
+                
+                if (currentReportFilter === 'month') {
+                    return dDate.getMonth() === now.getMonth() && dDate.getFullYear() === now.getFullYear();
+                } 
+                
+                if (currentReportFilter === 'quarter') {
+                    const currentQ = Math.floor(now.getMonth() / 3);
+                    const docQ = Math.floor(dDate.getMonth() / 3);
+                    return currentQ === docQ && dDate.getFullYear() === now.getFullYear();
+                } 
+                
+                if (currentReportFilter === 'year') {
+                    return dDate.getFullYear() === now.getFullYear();
+                }
+                return true;
+            });
+
+            // Update Statistics numbers
+            document.getElementById('stat-total').textContent = filtered.length;
+            document.getElementById('stat-pending').textContent = filtered.filter(d => d.status === 'ລໍຖ້າການເຊັນ').length;
+            document.getElementById('stat-signed').textContent = filtered.filter(d => d.status === 'ເຊັນແລ້ວ' || d.status === 'ສຳເລັດ').length;
+
+            // Update Chart based on filtered data
+            if (analyticsChart) {
+                const deptCounts = {};
+                filtered.forEach(d => {
+                    const deptName = d.department === 'ອື່ນໆ' ? (d.otherDept || 'ອື່ນໆ') : d.department;
+                    deptCounts[deptName] = (deptCounts[deptName] || 0) + 1;
+                });
+
+                const labels = Object.keys(deptCounts);
+                const counts = Object.values(deptCounts);
+
+                analyticsChart.data.labels = labels;
+                analyticsChart.data.datasets[0].data = counts;
+                analyticsChart.update();
+            }
+        }
+
+        function renderTable(filter = '') {
+            const tbody = document.getElementById('documentTableBody');
+            tbody.innerHTML = '';
+            const search = filter.toLowerCase();
+            
+            documents.filter(d => d.title.toLowerCase().includes(search) || d.owner.toLowerCase().includes(search)).forEach(d => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 border-b text-xs transition-all";
+                const displayType = d.type === 'ອື່ນໆ' ? d.otherType : d.type;
+                const displayDept = d.department === 'ອື່ນໆ' ? d.otherDept : d.department;
+                
+                tr.innerHTML = `
+                    <td class="p-4 text-slate-500">${d.date}</td>
+                    <td class="p-4">
+                        <div class="font-bold text-slate-800">${d.title}</div>
+                        <div class="text-[9px] text-indigo-500 font-bold uppercase">${displayType}</div>
+                    </td>
+                    <td class="p-4 font-medium text-slate-600">${displayDept}</td>
+                    <td class="p-4">${d.owner}</td>
+                    <td class="p-4 text-center">
+                        <span class="px-2 py-1 rounded-lg font-bold text-[9px] ${d.status === 'ເຊັນແລ້ວ' || d.status === 'ສຳເລັດ' ? 'bg-green-100 text-green-700' : d.status === 'ຕີກັບ/ແກ້ໄຂ' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}">${d.status}</span>
+                    </td>
+                    <td class="p-4 text-center">
+                        <div class="flex justify-center gap-2">
+                            <button onclick="openEditModal('${d.id}')" class="text-blue-500 hover:bg-blue-50 p-1.5 rounded-lg"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke-width="2"/></svg></button>
+                            <button onclick="deleteDocData('${d.id}')" class="text-red-400 hover:bg-red-50 p-1.5 rounded-lg"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-width="2"/></svg></button>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.onload = () => {
+            onAuthStateChanged(auth, setupDataListener);
+            const ctx = document.getElementById('analyticsChart').getContext('2d');
+            analyticsChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f43f5e'] }] },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: { 
+                        legend: { 
+                            position: 'bottom', 
+                            labels: { 
+                                font: { family: 'Noto Sans Lao', size: 10 },
+                                padding: 10,
+                                boxWidth: 10
+                            } 
+                        } 
+                    } 
+                }
+            });
+            document.getElementById('searchInput').oninput = (e) => renderTable(e.target.value);
+        };
+
+        window.openAddModal = () => {
+            document.getElementById('docForm').reset();
+            document.getElementById('editId').value = '';
+            document.getElementById('docDate').valueAsDate = new Date();
+            document.getElementById('modal').classList.remove('hidden');
+            handleDeptChange(); handleTypeChange();
+        };
+
+        window.openEditModal = (id) => {
+            const d = documents.find(x => x.id === id);
+            document.getElementById('editId').value = id;
+            document.getElementById('docDate').value = d.date;
+            document.getElementById('docDept').value = d.department;
+            document.getElementById('otherDeptInput').value = d.otherDept || '';
+            document.getElementById('docType').value = d.type;
+            document.getElementById('otherTypeInput').value = d.otherType || '';
+            document.getElementById('docTitle').value = d.title;
+            document.getElementById('docPurpose').value = d.purpose;
+            document.getElementById('docOwner').value = d.owner;
+            document.getElementById('docStatus').value = d.status;
+            document.getElementById('docFileUrl').value = d.fileUrl || '';
+            document.getElementById('docNote').value = d.note || '';
+            document.getElementById('modal').classList.remove('hidden');
+            handleDeptChange(); handleTypeChange();
+        };
+
         window.closeModal = () => document.getElementById('modal').classList.add('hidden');
+        
+        function showNotification(msg, type="success") {
+            const n = document.createElement('div');
+            n.className = `fixed bottom-5 right-5 px-6 py-3 rounded-2xl text-white shadow-2xl z-[200] ${type==='success'?'bg-emerald-600':'bg-red-600'}`;
+            n.textContent = msg;
+            document.body.appendChild(n);
+            setTimeout(() => n.remove(), 3000);
+        }
     </script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;700;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;700&display=swap');
         body { font-family: 'Noto Sans Lao', sans-serif; }
+        .report-btn { cursor: pointer; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
 
-    <!-- Loading Overlay -->
-    <div id="loadingOverlay" class="fixed inset-0 bg-white flex flex-col items-center justify-center z-[100]">
-        <div class="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-        <p class="mt-4 font-bold text-slate-400 animate-pulse italic text-sm">ກຳລັງເຊື່ອມຕໍ່ລະບົບ Cloud...</p>
+    <!-- Login Page -->
+    <div id="loginPage" class="fixed inset-0 bg-indigo-950 flex items-center justify-center p-4 z-[100]">
+        <div class="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md">
+            <div class="text-center mb-8">
+                <div class="w-20 h-20 bg-indigo-100 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-4">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                </div>
+                <h2 class="text-2xl font-black text-slate-800">E-Doc Souksawath.K</h2>
+                <p class="text-slate-500 text-xs">ລະບົບຄຸ້ມຄອງເອກະສານຄວາມປອດໄພສູງ</p>
+            </div>
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <input type="email" id="loginEmail" placeholder="ອີເມລຜູ້ໃຊ້" required class="w-full p-4 bg-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500">
+                <input type="password" id="loginPass" placeholder="ລະຫັດຜ່ານ" required class="w-full p-4 bg-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500">
+                <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-indigo-700 transition transform active:scale-95">ເຂົ້າສູ່ລະບົບ</button>
+            </form>
+        </div>
     </div>
 
     <!-- Main Content -->
-    <div id="mainContent" class="hidden min-h-screen flex flex-col">
-        <nav class="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
-            <div class="flex items-center gap-3">
-                <div class="bg-indigo-600 p-2 rounded-xl text-white font-black italic shadow-lg shadow-indigo-200">ED</div>
-                <h1 class="font-black text-slate-800 tracking-tight text-lg">SOUKSAWATH.K</h1>
+    <div id="mainContent" class="hidden">
+        <nav class="bg-white border-b border-slate-200 p-4 sticky top-0 z-50">
+            <div class="container mx-auto flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <div class="bg-indigo-600 p-2 rounded-xl text-white">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"></path></svg>
+                    </div>
+                    <h1 class="text-lg font-black text-slate-800 tracking-tight">E-Doc Souksawath.k</h1>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span id="userDisplay" class="text-xs font-bold text-slate-500 bg-slate-100 px-4 py-2 rounded-full hidden md:block"></span>
+                    <button onclick="handleLogout()" class="text-red-500 hover:bg-red-50 p-2 rounded-xl transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                    </button>
+                </div>
             </div>
-            <div class="flex gap-2 p-1 bg-slate-100 rounded-2xl">
-                <button id="tab-general" onclick="switchTab('general')" class="px-6 py-2 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition-all">ເອກະສານທົ່ວໄປ</button>
-                <button id="tab-research" onclick="switchTab('research')" class="px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all">ວຽກຄົ້ນຄວ້າ</button>
-                <button id="tab-reports" onclick="switchTab('reports')" class="px-6 py-2 rounded-xl font-bold text-xs text-slate-500 hover:bg-slate-100 transition-all">📊 ລາຍງານ</button>
-            </div>
-            <div id="userDisplay" class="text-[10px] font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-full border"></div>
         </nav>
 
-        <main class="container mx-auto p-6 md:p-8 flex-1">
-            <div id="tableSection" class="space-y-6">
-                <div class="flex justify-between items-center">
-                    <h2 class="text-xl font-black text-slate-800">ລາຍການຂໍ້ມູນຫຼ້າສຸດ</h2>
-                    <button onclick="openModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold text-xs shadow-xl shadow-indigo-100 transition-all">+ ເພີ່ມໃໝ່</button>
+        <main class="container mx-auto p-4 md:p-8">
+            <!-- Analytics & Reports -->
+            <div class="flex flex-col lg:flex-row gap-6 mb-10">
+                <div class="flex-1">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <h2 class="text-2xl font-black text-slate-800 tracking-tight">ລາຍງານ ແລະ ສະຖິຕິ</h2>
+                        <div class="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200 overflow-x-auto max-w-full">
+                            <button onclick="setReportFilter('all')" class="report-btn px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 text-white transition whitespace-nowrap">ທັງໝົດ</button>
+                            <button onclick="setReportFilter('week')" class="report-btn px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-600 transition whitespace-nowrap">ອາທິດ</button>
+                            <button onclick="setReportFilter('month')" class="report-btn px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-600 transition whitespace-nowrap">ເດືອນ</button>
+                            <button onclick="setReportFilter('quarter')" class="report-btn px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-600 transition whitespace-nowrap">ໄຕມາດ</button>
+                            <button onclick="setReportFilter('year')" class="report-btn px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-600 transition whitespace-nowrap">ປີ</button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-indigo-600 text-white p-6 rounded-[2rem] shadow-xl relative overflow-hidden">
+                            <div class="relative z-10">
+                                <p class="text-indigo-100 text-[10px] font-bold uppercase tracking-widest mb-1">ເອກະສານທີ່ເລືອກ</p>
+                                <h3 class="text-4xl font-black" id="stat-total">0</h3>
+                            </div>
+                            <svg class="absolute -right-4 -bottom-4 w-24 h-24 text-indigo-500 opacity-30" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2V6l-4-4H9z"></path></svg>
+                        </div>
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
+                            <p class="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">ລໍຖ້າການເຊັນ</p>
+                            <h3 class="text-4xl font-black text-amber-500" id="stat-pending">0</h3>
+                        </div>
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
+                            <p class="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">ສຳເລັດແລ້ວ</p>
+                            <h3 class="text-4xl font-black text-emerald-500" id="stat-signed">0</h3>
+                        </div>
+                    </div>
                 </div>
-                <div class="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm">
-                    <table class="w-full text-left">
-                        <thead id="tableHead" class="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase border-b"></thead>
-                        <tbody id="tableBody" class="divide-y divide-slate-50"></tbody>
-                    </table>
+                <div class="lg:w-80 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
+                    <p class="text-xs font-bold text-slate-800 mb-4 uppercase tracking-widest text-center">ແຍກຕາມຝ່າຍ</p>
+                    <div class="h-48"><canvas id="analyticsChart"></canvas></div>
                 </div>
             </div>
 
-            <div id="reportSection" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div class="bg-white p-10 rounded-[2.5rem] border shadow-sm flex flex-col items-center justify-center relative">
-                    <div class="h-64 w-full">
-                        <canvas id="reportChart"></canvas>
+            <!-- Management Section -->
+            <div class="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
+                <div class="p-6 md:p-8 flex flex-col md:flex-row justify-between items-center gap-6 border-b border-slate-100 bg-slate-50/30">
+                    <div>
+                        <h3 class="text-lg font-black text-slate-800">ລາຍການເອກະສານ</h3>
+                        <p class="text-slate-400 text-[10px] uppercase tracking-widest">Real-time Data Management</p>
                     </div>
-                    <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                        <p class="text-[10px] font-bold text-slate-400 uppercase">ຂໍ້ມູນທັງໝົດ</p>
-                        <span id="totalCount" class="text-4xl font-black text-slate-800">0</span>
+                    <div class="flex flex-wrap justify-center gap-3 w-full md:w-auto">
+                        <div class="relative flex-1 md:w-64">
+                            <input type="text" id="searchInput" placeholder="ຄົ້ນຫາຫົວຂໍ້, ຜູ້ຮັບຜິດຊອບ..." class="w-full p-3.5 pl-11 bg-white border border-slate-200 rounded-2xl outline-none text-sm focus:ring-4 focus:ring-indigo-500/10">
+                            <svg class="w-5 h-5 absolute left-4 top-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-width="2"></path></svg>
+                        </div>
+                        <button onclick="exportToExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white p-3.5 rounded-2xl font-bold flex items-center gap-2 transition shadow-lg active:scale-95">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2"></path></svg>
+                        </button>
+                        <button onclick="openAddModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3.5 rounded-2xl font-bold flex items-center gap-2 transition shadow-lg active:scale-95">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-width="2"></path></svg>
+                            ເພີ່ມໃໝ່
+                        </button>
                     </div>
                 </div>
-                <div class="space-y-4">
-                    <div class="bg-indigo-600 p-8 rounded-[2rem] text-white shadow-xl shadow-indigo-100">
-                        <p class="text-xs opacity-70">ສະຖານະລະບົບ</p>
-                        <h3 class="text-2xl font-bold mt-1">Online (Real-time)</h3>
-                    </div>
-                    <div class="bg-white p-8 rounded-[2rem] border border-slate-100">
-                        <p class="text-xs text-slate-400">ໝາຍເຫດ</p>
-                        <p class="mt-2 text-sm text-slate-600">ຂໍ້ມູນທັງໝົດຈະຖືກບັນທຶກລົງຖານຂໍ້ມູນ Cloud ແບບອັດຕະໂນມັດ.</p>
-                    </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-50/50 text-[10px] uppercase font-bold text-slate-400 tracking-[0.15em] border-b border-slate-100">
+                            <tr>
+                                <th class="p-6">ວັນທີ</th>
+                                <th class="p-6">ຫົວຂໍ້ເອກະສານ</th>
+                                <th class="p-6">ຝ່າຍທີ່ຮັບຜິດຊອບ</th>
+                                <th class="p-6">ຜູ້ຮັບຜິດຊອບ</th>
+                                <th class="p-6 text-center">ສະຖານະ</th>
+                                <th class="p-6 text-center">ຈັດການ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="documentTableBody" class="divide-y divide-slate-50"></tbody>
+                    </table>
                 </div>
             </div>
         </main>
     </div>
 
-    <!-- Modal -->
-    <div id="modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md border overflow-hidden">
-            <form onsubmit="saveData(event)" class="p-8 space-y-4">
-                <div class="flex justify-between items-center border-b pb-4 mb-2">
-                    <h3 class="font-black text-lg text-slate-800 text-indigo-600">ບັນທຶກເອກະສານໃໝ່</h3>
-                    <button type="button" onclick="closeModal()" class="text-slate-300 hover:text-slate-500">✕</button>
+    <!-- Enhanced Modal -->
+    <div id="modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden transform transition-all scale-100">
+            <div class="bg-indigo-600 p-8 text-white flex justify-between items-center">
+                <div>
+                    <h3 class="text-xl font-black">ຟອມຂໍ້ມູນເອກະສານ</h3>
+                    <p class="text-indigo-200 text-[10px] uppercase tracking-widest mt-1">Souksawath.K-CSE</p>
                 </div>
-                <div class="space-y-1">
-                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ວັນທີບັນທຶກ</label>
-                    <input type="date" id="f-date" required class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
+                <button onclick="closeModal()" class="p-2 hover:bg-white/10 rounded-xl transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" stroke-width="2.5"></path></svg>
+                </button>
+            </div>
+            <form id="docForm" class="p-8 grid grid-cols-2 gap-6 max-h-[75vh] overflow-y-auto">
+                <input type="hidden" id="editId">
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ວັນທີ</label>
+                    <input type="date" id="docDate" required class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
                 </div>
-                <div class="space-y-1">
-                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ເລກທີເອກະສານ</label>
-                    <input type="text" id="f-no" placeholder="ED-2024-XXX" class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
-                </div>
-                <div class="space-y-1">
-                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ຫົວຂໍ້ເອກະສານ</label>
-                    <input type="text" id="f-title" placeholder="ລະບຸຫົວຂໍ້..." required class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-sm font-black border-none">
-                </div>
-                <div class="space-y-1">
-                    <label class="text-[10px] font-bold text-slate-400 ml-2 uppercase">ປະເພດ</label>
-                    <select id="f-type" class="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 ring-indigo-500 text-xs font-bold border-none">
-                        <option>ໃບສະເໜີ</option>
-                        <option>ແຈ້ງການ</option>
-                        <option>ຂໍ້ຕົກລົງ</option>
-                        <option>ບົດບັນທຶກ</option>
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ຝ່າຍ</label>
+                    <select id="docDept" onchange="handleDeptChange()" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                        <option>ຝ່າຍບໍລິຫານ-ພິທີການ</option>
+                        <option>ຝ່າຍຄຸ້ມຄອງຊັບສິນ-ສາງ</option>
+                        <option>ຝ່າຍເຕັກໂນໂລຊີ-ຂໍ້ມູນຂ່າວສານ</option>
+                        <option>ຝ່າຍການເງິນ</option>
+                        <option value="ອື່ນໆ">ອື່ນໆ...</option>
                     </select>
                 </div>
-                <div class="flex gap-3 pt-6">
-                    <button type="button" onclick="closeModal()" class="flex-1 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold text-xs">ຍົກເລີກ</button>
-                    <button type="submit" class="flex-2 py-4 bg-indigo-600 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-100 px-8">ບັນທຶກຂໍ້ມູນ</button>
+                <div class="col-span-2 hidden animate-pulse" id="otherDeptContainer">
+                    <label class="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-2">ລະບຸຊື່ຝ່າຍເອງ</label>
+                    <input type="text" id="otherDeptInput" placeholder="ພິມຊື່ຝ່າຍຂອງທ່ານ..." class="w-full p-4 bg-indigo-50 border border-indigo-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                </div>
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ປະເພດເອກະສານ</label>
+                    <select id="docType" onchange="handleTypeChange()" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                        <option>ໃບສະເໜີ</option>
+                        <option>ບົດສະຫຼຸບ</option>
+                        <option>ໃບອະນຸມັດ</option>
+                        <option>ຂໍ້ຕົກລົງ</option>
+                        <option>ໃບສັ່ງຈ່າຍ</option>
+                        <option value="ອື່ນໆ">ອື່ນໆ...</option>
+                    </select>
+                </div>
+                <div class="col-span-1 hidden animate-pulse" id="otherTypeContainer">
+                    <label class="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-2">ລະບຸປະເພດເອງ</label>
+                    <input type="text" id="otherTypeInput" placeholder="ພິມປະເພດເອກະສານ..." class="w-full p-4 bg-indigo-50 border border-indigo-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                </div>
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ຈຸດປະສົງ</label>
+                    <select id="docPurpose" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                        <option>ຂໍລາຍເຊັນ</option><option>ຂໍຄຳເຫັນ</option><option>ເພື່ອຮັບຊາບ</option>
+                    </select>
+                </div>
+                <div class="col-span-2">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ຫົວຂໍ້ເອກະສານ</label>
+                    <input type="text" id="docTitle" required class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                </div>
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ຜູ້ຮັບຜິດຊອບ</label>
+                    <input type="text" id="docOwner" required class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                </div>
+                <div class="col-span-1">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ສະຖານະ</label>
+                    <select id="docStatus" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                        <option>ລໍຖ້າການເຊັນ</option><option>ເຊັນແລ້ວ</option><option>ສຳເລັດ</option><option>ຕີກັບ/ແກ້ໄຂ</option>
+                    </select>
+                </div>
+                <div class="col-span-2">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ລິ້ງໄຟລ໌ (Google Drive / Cloud)</label>
+                    <input type="url" id="docFileUrl" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition">
+                </div>
+                <div class="col-span-2">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">ໝາຍເຫດ</label>
+                    <textarea id="docNote" rows="2" class="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition"></textarea>
+                </div>
+                <div class="col-span-2 mt-4">
+                    <button type="submit" class="w-full py-5 bg-indigo-600 text-white rounded-3xl font-black shadow-2xl hover:bg-indigo-700 transition transform active:scale-95">ບັນທຶກລົງລະບົບ Cloud</button>
                 </div>
             </form>
         </div>
